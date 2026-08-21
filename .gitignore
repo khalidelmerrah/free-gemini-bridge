@@ -1,0 +1,5 @@
+# Real credentials — never commit
+gemini_tokens.json
+creds.env
+pasted_code.txt
+*.token
