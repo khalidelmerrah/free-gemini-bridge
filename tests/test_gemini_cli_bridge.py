@@ -103,6 +103,18 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("available", r.json())
 
+    def test_quota_endpoint_shape(self):
+        r = self.client.get("/quota")
+        self.assertEqual(r.status_code, 200)
+        d = r.json()
+        self.assertTrue(d["logged_in"])
+        self.assertIsInstance(d["windows"], list)
+        self.assertTrue(any("Gemini" in w["label"] for w in d["windows"]))
+        for w in d["windows"][:2]:
+            self.assertIn("remaining_percent", w)
+            self.assertIn("reset_at", w)
+        self.assertTrue(d["details"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -486,6 +486,34 @@ def create_app() -> FastAPI:
         accts = _accounts()
         return {"accounts": len(accts), "emails": list(accts)}
 
+    @app.get("/quota")
+    def quota():
+        """Quota for the ACTIVE account — same shape the gemini-quota chip expects."""
+        email = _active_email()
+        try:
+            status, res = _gca_call("fetchAvailableModels", {}, email)
+        except HTTPException as e:
+            return {"logged_in": False, "plan": None, "windows": [],
+                    "details": [f"auth unavailable: {e.detail}"]}
+        if status != 200 or not isinstance(res, dict):
+            return {"logged_in": True, "plan": email, "windows": [],
+                    "details": [f"quota fetch failed: HTTP {status}"]}
+        models = res.get("models", {})
+        windows, details = [], []
+        for name, info in models.items():
+            q = info.get("quotaInfo") or {}
+            frac = q.get("remainingFraction")
+            pct = round(frac * 100) if isinstance(frac, (int, float)) else None
+            label = info.get("displayName") or name
+            reset = q.get("resetTime")
+            windows.append({"label": label, "remaining_percent": pct, "reset_at": reset})
+            line = f"{label}: {'—' if pct is None else str(pct) + '% remaining'}"
+            if reset:
+                line += f" · resets {str(reset)[:16].replace('T', ' ')}"
+            details.append(line)
+        windows.sort(key=lambda w: (w["remaining_percent"] is None, -(w["remaining_percent"] or 0)))
+        return {"logged_in": True, "plan": email, "windows": windows[:8], "details": details[:8]}
+
     @app.post("/v1/chat/completions")
     def chat(body: ChatIn = Body(...)):
         email = _active_email()

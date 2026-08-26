@@ -1,10 +1,12 @@
 """Gemini Quota backend — reads real Gemini quota via Antigravity's Cloud Code API.
 
-Auth: Google OAuth tokens extracted from the local Antigravity IDE login state
-(state.vscdb → antigravityUnifiedStateSync.oauthToken, protobuf-decoded —
-the same technique as the open-source cockpit-tools project). No API key,
-no separate login: whatever account is signed into Antigravity is the one
-whose quota shows in the status bar.
+Primary source (v2): the free-gemini-bridge at http://127.0.0.1:8787 — its
+`/quota` endpoint uses the ACTIVE account (auto-follows Cockpit Tools account
+switching), so chip and chat provider always agree on the account.
+
+Fallback (v1, kept): direct extraction from the local Antigravity IDE login
+state (state.vscdb → antigravityUnifiedStateSync.oauthToken, protobuf-decoded —
+the same technique as the open-source cockpit-tools project).
 
 Quota endpoint (same one Antigravity uses):
     POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels
@@ -15,6 +17,8 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
+BRIDGE_QUOTA_URL = "http://127.0.0.1:8787/quota"
+
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 QUOTA_URL_DAILY = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
 QUOTA_URL_PROD = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
@@ -24,6 +28,15 @@ USER_AGENT = "antigravity/1.20.5 windows/amd64"
 
 TOKENS_PATH = os.path.expanduser("~/.sharksms-outreach/gemini_tokens.json")
 STATE_DB = os.path.expanduser("~/AppData/Roaming/Antigravity/User/globalStorage/state.vscdb")
+
+
+def _bridge_quota():
+    """Try the bridge first — returns (payload, None) or (None, error)."""
+    try:
+        with urllib.request.urlopen(BRIDGE_QUOTA_URL, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8")), None
+    except Exception as exc:
+        return None, f"bridge unavailable: {exc}"
 
 
 def _load_tokens():
@@ -240,6 +253,11 @@ def _email_from_id_token(tokens):
 
 @router.get("/quota")
 async def quota():
+    # Primary: bridge (active account follows Cockpit)
+    payload, err = _bridge_quota()
+    if payload is not None:
+        return payload
+    # Fallback: legacy direct extraction from Antigravity's login state
     tokens = _load_tokens()
     if not tokens:
         tokens = _extract_tokens_from_antigravity()
@@ -248,10 +266,12 @@ async def quota():
             "logged_in": False,
             "plan": None,
             "windows": [],
-            "details": ["Not logged into Antigravity on this machine"],
+            "details": [f"Not logged in (bridge down: {err or 'unknown'})"],
         }
     result = _quota_response(tokens)
     email = _email_from_id_token(tokens)
     if email and result.get("plan") is None:
         result["plan"] = email
+    if result.get("details"):
+        result["details"] = result["details"][:7] + [f"bridge down: {err}"]
     return result
