@@ -36,8 +36,20 @@ SUBSCRIPTION_REQUIRED #3501`. Details in `docs/how-we-did-it.md`.
 
 - **OpenAI-compatible API** (`/v1/models`, `/v1/chat/completions` incl. SSE
   streaming) — works with any OpenAI client, not just Hermes.
-- **Zero-setup auth** — reuses Cockpit's existing Antigravity Google logins
-  (4 accounts on this machine, one per Google account).
+- **Zero-setup auth** — reuses existing Google logins from *any* of several
+  sources; no Gemini CLI login, no API key.
+- **Pluggable auth sources** — the bridge discovers whatever is on the
+  machine:
+  - **Antigravity IDE** login (`state.vscdb`) — auto-detected
+  - **Cockpit Tools** — auto-follows its active account; import accounts from
+    a data-transfer export file (`cockpit_export.json` dropped next to the bridge)
+  - **Fresh Google sign-in** — the setup wizard can mint a brand-new login for
+    any Google account (phone-completable loopback flow) — works with zero
+    prior software installed
+  - **Manual paste** — import a refresh token directly
+- **Installable** — `setup_bridge.py` is an interactive wizard: pick source →
+  it saves the accounts → runs a live verification call → prints the exact
+  Hermes config commands.
 - **Account switching like Cockpit** — the bridge *auto-follows* Cockpit's
   active account (`current_account_id`), or switch explicitly via
   `POST /v1/account/switch {"email": …}`.
@@ -47,6 +59,28 @@ SUBSCRIPTION_REQUIRED #3501`. Details in `docs/how-we-did-it.md`.
   restarts it within 5 minutes if it ever dies.
 - **Secure** — binds `127.0.0.1` only; refresh tokens never leave this
   machine; the registry file is gitignored.
+
+## Installing on another machine (standalone)
+
+Requirements: Python 3.10+, `pip install fastapi uvicorn pydantic`, and the
+Hermes venv if you want the provided scripts to use it.
+
+1. Copy `gemini_cli_bridge.py`, `accounts.json` (optional), `setup_bridge.py`,
+   `start_bridge.bat`, `bridge_watchdog.py` into a folder.
+2. Run `python setup_bridge.py` and pick an auth source:
+   - **Antigravity IDE** — uses the local IDE login automatically
+   - **Cockpit Tools export** — point it at your data-transfer JSON
+   - **Google phone sign-in** — no prior login needed, any Google account
+   - **Paste a token** — advanced
+3. Start the bridge: `python -m uvicorn gemini_cli_bridge:app --host 127.0.0.1 --port 8787`
+   (or `start_bridge.bat`; add the watchdog as a scheduled task for self-healing).
+4. Add the provider to Hermes with the printed `hermes config set …` commands,
+   restart Hermes, pick **Gemini** in the dropdown.
+
+Auth sources are auto-merged on every bridge start: any account found in the
+IDE state or a dropped `cockpit_export.json` is added to the registry
+(never overwriting an existing entry). `GET /v1/auth/sources` shows what was
+found and from where.
 
 ## Quick start (this machine — already deployed)
 

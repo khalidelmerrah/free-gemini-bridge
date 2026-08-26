@@ -99,9 +99,146 @@ def _load_registry() -> dict:
     return reg
 
 
+def _protobuf_varint(data: bytes, offset: int):
+    result, shift, pos = 0, 0, offset
+    while True:
+        b = data[pos]
+        result |= (b & 0x7F) << shift
+        pos += 1
+        if b & 0x80 == 0:
+            break
+        shift += 7
+    return result, pos
+
+
+def _protobuf_skip(data: bytes, offset: int, wire: int) -> int:
+    if wire == 0:
+        return _protobuf_varint(data, offset)[1]
+    if wire == 1:
+        return offset + 8
+    if wire == 2:
+        length, pos = _protobuf_varint(data, offset)
+        return pos + length
+    if wire == 5:
+        return offset + 4
+    raise ValueError(f"wire {wire}")
+
+
+def _protobuf_field(data: bytes, target: int) -> bytes | None:
+    offset = 0
+    while offset < len(data):
+        tag, off = _protobuf_varint(data, offset)
+        wire, fnum = tag & 7, tag >> 3
+        if fnum == target and wire == 2:
+            ln, content = _protobuf_varint(data, off)
+            return data[content:content + ln]
+        offset = _protobuf_skip(data, off, wire)
+    return None
+
+
+def _protobuf_str(data: bytes, target: int) -> str | None:
+    v = _protobuf_field(data, target)
+    return v.decode("utf-8", "replace") if v else None
+
+
+def _decode_oauth_blob(entry: bytes) -> dict | None:
+    """Decode Antigravity state.vscdb oauthToken entry → {access, refresh, id_token}."""
+    if _protobuf_str(entry, 1) != "oauthTokenInfoSentinelKey":
+        return None
+    row = _protobuf_field(entry, 2)
+    if not row:
+        return None
+    b64 = _protobuf_str(row, 1)
+    if not b64:
+        return None
+    try:
+        oauth = __import__("base64").b64decode(b64)
+    except Exception:
+        return None
+    return {
+        "access_token": _protobuf_str(oauth, 1),
+        "refresh_token": _protobuf_str(oauth, 3),
+        "id_token": _protobuf_str(oauth, 5),
+    }
+
+
+def _email_from_id_token(id_token: str | None) -> str | None:
+    if not id_token:
+        return None
+    try:
+        import base64
+        payload = id_token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.b64decode(payload)).get("email")
+    except Exception:
+        return None
+
+
+def _discover_external_accounts() -> dict[str, dict]:
+    """Auto-discover accounts from other auth sources on this machine."""
+    found: dict[str, dict] = {}
+
+    # 1) Antigravity IDE login state (state.vscdb)
+    try:
+        import base64
+        import sqlite3
+        db = HOME / "AppData" / "Roaming" / "Antigravity" / "User" / "globalStorage" / "state.vscdb"
+        if db.exists():
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            row = conn.execute(
+                "SELECT value FROM ItemTable WHERE key='antigravityUnifiedStateSync.oauthToken'"
+            ).fetchone()
+            conn.close()
+            if row:
+                blob = base64.b64decode(row[0])
+                # top level is a topic list: iterate field-1 entries
+                offset = 0
+                while offset < len(blob):
+                    tag, off = _protobuf_varint(blob, offset)
+                    wire, fnum = tag & 7, tag >> 3
+                    if fnum == 1 and wire == 2:
+                        ln, content = _protobuf_varint(blob, off)
+                        entry = blob[content:content + ln]
+                        info = _decode_oauth_blob(entry)
+                        if info and info.get("refresh_token"):
+                            email = _email_from_id_token(info.get("id_token")) or "antigravity-ide"
+                            found[email] = {"email": email,
+                                            "refresh_token": info["refresh_token"],
+                                            "source": "antigravity-ide"}
+                    offset = _protobuf_skip(blob, off, wire)
+    except Exception:
+        pass
+
+    # 2) Cockpit data-transfer export dropped next to the bridge
+    exp = REPO / "cockpit_export.json"
+    if exp.exists():
+        try:
+            d = json.loads(exp.read_text(encoding="utf-8"))
+            platforms = d.get("accounts", {}).get("platforms", {})
+            for plat in ("antigravity", "antigravity_ide"):
+                for acc in platforms.get(plat, {}).get("exported_data", []) or []:
+                    rt = acc.get("refresh_token")
+                    if rt and acc.get("email"):
+                        found[acc["email"]] = {"email": acc["email"],
+                                               "refresh_token": rt,
+                                               "source": "cockpit-export"}
+        except Exception:
+            pass
+    return found
+
+
 def _accounts() -> dict[str, dict]:
     reg = _load_registry()
-    return {a["email"]: a for a in reg["accounts"]}
+    accts = {a["email"]: a for a in reg["accounts"]}
+    merged = False
+    for email, acc in _discover_external_accounts().items():
+        if email not in accts:
+            accts[email] = acc
+            merged = True
+    if merged:
+        reg["accounts"] = list(accts.values())
+        REGISTRY.write_text(json.dumps(reg, indent=1), encoding="utf-8")
+    return accts
 
 
 def _cockpit_active_email() -> str | None:
@@ -326,12 +463,28 @@ def create_app() -> FastAPI:
         _save_state(st)
         return {"follow_cockpit": body.follow, "active": _active_email()}
 
-    class ChatIn(BaseModel):
-        model: str
-        messages: list[dict]
-        stream: bool = False
-        temperature: float | None = None
-        max_tokens: int | None = None
+    @app.get("/v1/auth/sources")
+    def auth_sources():
+        """Report every auth source detected on this machine + which accounts it yields."""
+        discovered = _discover_external_accounts()
+        accts = _accounts()
+        by_source: dict[str, list[str]] = {}
+        for acc in accts.values():
+            by_source.setdefault(acc.get("source", "registry"), []).append(acc["email"])
+        return {
+            "registry": REGISTRY.name,
+            "discovered": {k: list(v) for k, v in by_source.items()},
+            "external_now": {k: list(v) for k, v in
+                             {s: [a["email"] for a in discovered.values()
+                                  if a.get("source") == s] for s in
+                              {a.get("source") for a in discovered.values()}}.items()},
+        }
+
+    @app.post("/v1/auth/reload")
+    def auth_reload():
+        _TOKEN_CACHE.clear()
+        accts = _accounts()
+        return {"accounts": len(accts), "emails": list(accts)}
 
     @app.post("/v1/chat/completions")
     def chat(body: ChatIn = Body(...)):

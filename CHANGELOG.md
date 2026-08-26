@@ -2,6 +2,20 @@
 
 All notable changes to the Gemini × Hermes integration.
 
+## [2.1.0] — 2026-08-26 — Standalone / installable (pluggable auth sources)
+
+- **Auth-source discovery in the bridge**: auto-detects accounts from the
+  Antigravity IDE login state (`state.vscdb`, topic-list protobuf decoding —
+  fixed a wire-2 skip bug) and from a Cockpit data-transfer export
+  (`cockpit_export.json` dropped next to the bridge). New accounts merge into
+  the registry on startup; existing entries are never clobbered.
+- **`setup_bridge.py`** — interactive installer: pick a source (Antigravity
+  IDE auto-detect / Cockpit export file / fresh Google phone sign-in via
+  loopback OAuth / manual paste), save accounts, live-verify one generation,
+  print the Hermes config commands. `--detect` mode for scripts.
+- New endpoints: `GET /v1/auth/sources`, `POST /v1/auth/reload`.
+- New tests: 8 total (discovery, merge, export parsing — no network).
+
 ## [2.0.0] — 2026-08-26 — Direct GCA bridge (login-free)
 
 **The big one.** Gemini became a fully working Hermes chat provider with zero
