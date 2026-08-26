@@ -1,9 +1,11 @@
-# Gemini × Hermes — Gemini as a first-class Hermes provider
+# free-gemini-bridge — Gemini as a first-class LLM provider (OpenAI-compatible)
 
 **Status: ✅ WORKING (2026-08-26)** — Gemini models (plus the full Antigravity
-lineup: Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B, …) are selectable in
-Hermes' model dropdown, authenticated with **the same Google accounts Cockpit
-Tools already manages** — no Gemini CLI login, no API key, no new browser flow.
+lineup: Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B, …) become a normal
+OpenAI-compatible endpoint — usable from Hermes, any OpenAI client, or any
+app — authenticated with **your own Google account**, no API key, no Gemini
+CLI login, no new browser flow. Powered by the free Gemini Code Assist tier
+that comes with your Google login.
 
 ---
 
