@@ -1,44 +1,31 @@
-# Status
+# Status — 2026-08-26
 
-## ✅ Working
+## ✅ DONE: Gemini as a Hermes chat provider
 
-1. **Gemini Quota chip** (Hermes desktop plugin `plugins/gemini-quota`)
-   - Reads quota from Antigravity's local login state — no login, no API key
-   - Shows per-model `remainingFraction` + reset times + account email
-   - Auto-refreshes token; auto-re-extracts from `state.vscdb` if refresh fails
-   - Enabling: `hermes config set plugins.enabled '["gemini-quota"]'`
-   - Verified: 25 models, real data (Gemini 3.7/2.5/3.1, Claude Sonnet 4.6, GPT-OSS…)
+| Piece | Status |
+|---|---|
+| Gemini as a **chat model** in Hermes | ✅ **WORKING** — provider `gemini-cli` → local bridge → GCA, verified end-to-end |
+| Auth | ✅ Zero setup — reuses Cockpit Tools' Antigravity Google refresh tokens; no CLI login, no API key |
+| Account switching | ✅ Auto-follows Cockpit's active account; manual override endpoints |
+| Model lineup | ✅ 25 models on the account incl. Gemini 3.6/3.1/3, Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B |
+| Streaming | ✅ SSE (`stream: true`), proper finish_reason |
+| Quota chip (status bar) | ✅ Still working (unchanged from v1) |
+| Ops resilience | ✅ Logon auto-start + 5-min watchdog (both verified) |
+| Tests | ✅ 5/5 (mocked GCA, no network) |
 
-2. **Phone-completable OAuth login** (`scripts/gemini_phone_login.py`)
-   - Proven end-to-end on 2026-08-19 (user completed from phone, code captured,
-     tokens saved to `~/.sharksms-outreach/gemini_tokens.json`)
-   - Loopback redirect + PKCE; code travels in the pasted URL text
+## Known limits (next steps)
 
-3. **Gemini CLI installed** — `@google/gemini-cli@0.56.0`; `gemini-cli` Hermes
-   skill installed (delegation + this technique documented)
+1. **Tool/function calling** not yet translated in the bridge — plain chat is
+   solid; agentic tool use requires mapping OpenAI tools → GCA Vertex-style
+   `tools` in `generateContent`.
+2. GCA streaming returns whole events per SSE chunk (no token-level
+   incremental streaming through this RPC).
+3. Free Antigravity tier quota (weekly + 5h buckets) applies — real, visible
+   in the quota chip.
 
-## ❌ Blocked: Gemini as a CHAT model in Hermes
+## History
 
-**Why:** the public model API (`generativelanguage.googleapis.com`) requires the
-`generative-language` OAuth scope. Neither the Antigravity client nor the GCA
-client can be issued that scope (`restricted_client`). Tokens with
-`cloud-platform` get `403 insufficient authentication scopes` on model calls
-(verified with both clients' real tokens).
-
-**The likely unlock (unexplored):** the Gemini CLI's **GCA mode** generates
-through `https://cloudcode-pa.googleapis.com` (`CODE_ASSIST_ENDPOINT`), which
-accepts cloud-platform tokens (same host family as the quota API that works).
-The generation method path on that host was not yet dug out of the bundle
-(open thread: grep the bundle for `v1internal` paths next to `CODE_ASSIST_ENDPOINT`).
-
-**Alternative quick win:** `GOOGLE_GENAI_USE_GCA=true GOOGLE_CLOUD_ACCESS_TOKEN=<token> gemini -p "..."` —
-the CLI accepts an env-supplied token, so Hermes could delegate to the CLI with
-our Antigravity token (proven quota access) instead of proxying the API directly.
-
-## Next steps (when resumed)
-
-1. Find the cloudcode-pa generation path in the gemini-cli bundle
-   (`v1internal:*` methods near `CODE_ASSIST_ENDPOINT`)
-2. Test a generation call with the Antigravity access token
-3. If it works: build the local OpenAI-compat proxy → register as Hermes
-   `custom` provider → Gemini appears in the model picker
+- **2026-08-21** — research archive: quota chip working; chat model believed
+  blocked on OAuth scope.
+- **2026-08-26** — breakthrough: Antigravity tokens accepted by GCA with
+  Antigravity client identity → bridge v2 built, deployed, verified.

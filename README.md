@@ -1,68 +1,127 @@
-# Gemini × Hermes — integration research archive
+# Gemini × Hermes — Gemini as a first-class Hermes provider
 
-**Mission:** connect Google Gemini models to Hermes Agent the way Codex is
-connected — **account login, no API key** — plus a live per-model **quota
-status chip** in the Hermes desktop status bar.
-
-This repo is the complete handoff: what we learned, how we did it, what
-works, what's blocked, and exactly how to pick the work back up.
+**Status: ✅ WORKING (2026-08-26)** — Gemini models (plus the full Antigravity
+lineup: Claude Sonnet 4.6, Claude Opus 4.6, GPT-OSS 120B, …) are selectable in
+Hermes' model dropdown, authenticated with **the same Google accounts Cockpit
+Tools already manages** — no Gemini CLI login, no API key, no new browser flow.
 
 ---
 
-## TL;DR
+## What this is
 
-| Piece | Status |
+A small **localhost OpenAI-compatible bridge** that connects Hermes Agent to
+Google's **Gemini Code Assist (GCA) backend** using the OAuth refresh tokens
+stored by [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools) for
+Antigravity IDE accounts.
+
+```
+┌────────────┐   OpenAI API   ┌────────────────────┐   Bearer + Antigravity UA   ┌──────────────────────────────┐
+│   Hermes   │ ─────────────▶ │ gemini_cli_bridge  │ ──────────────────────────▶ │ daily-cloudcode-pa.googleapis│
+│ (provider  │ ◀───────────── │ 127.0.0.1:8787     │ ◀────────────────────────── │ .com/v1internal:generate…    │
+│  gemini-cli│    SSE stream  │ (FastAPI, Python)  │   refresh token every call  └──────────────────────────────┘
+└────────────┘                └────────────────────┘
+                                     │
+                                     ▼ reads
+                        ~/.antigravity_cockpit/accounts.json
+                        (Cockpit's active account → auto-follow)
+```
+
+**Key discovery:** Google's GCA backend accepts Antigravity OAuth tokens for
+full model inference — *only when the request identifies as the Antigravity
+IDE client* (User-Agent `antigravity/1.20.5 …` + `loadCodeAssist` metadata
+`ideType: ANTIGRAVITY`). Generic Gemini-CLI identity gets `403
+SUBSCRIPTION_REQUIRED #3501`. Details in `docs/how-we-did-it.md`.
+
+## Features
+
+- **OpenAI-compatible API** (`/v1/models`, `/v1/chat/completions` incl. SSE
+  streaming) — works with any OpenAI client, not just Hermes.
+- **Zero-setup auth** — reuses Cockpit's existing Antigravity Google logins
+  (4 accounts on this machine, one per Google account).
+- **Account switching like Cockpit** — the bridge *auto-follows* Cockpit's
+  active account (`current_account_id`), or switch explicitly via
+  `POST /v1/account/switch {"email": …}`.
+- **Live model list** — `/v1/models` returns the account's real available
+  models + quota from `fetchAvailableModels`.
+- **Self-healing ops** — starts at logon (scheduled task) and a watchdog
+  restarts it within 5 minutes if it ever dies.
+- **Secure** — binds `127.0.0.1` only; refresh tokens never leave this
+  machine; the registry file is gitignored.
+
+## Quick start (this machine — already deployed)
+
+1. Bridge runs automatically (task `HermesGeminiBridge` at logon + watchdog
+   `HermesGeminiBridgeWatchdog` every 5 min).
+2. Hermes config already has the provider:
+   ```yaml
+   providers:
+     gemini-cli:
+       name: Gemini (CLI login)
+       api: http://127.0.0.1:8787/v1
+       transport: chat_completions
+       default_model: gemini-3.6-flash-high
+       models: [gemini-3.6-flash-high, gemini-3.1-pro-high, gemini-3-flash,
+                gemini-2.5-pro, claude-sonnet-4-6, claude-opus-4-6-thinking,
+                gpt-oss-120b-medium, gemini-pro-agent, …]
+       discover_models: true
+   ```
+3. Restart Hermes → pick **Gemini (CLI login)** in the model dropdown.
+
+Manual start (if ever needed):
+```bat
+cd C:\Users\admindev\gemini-hermes
+C:\Users\admindev\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe -m uvicorn gemini_cli_bridge:app --host 127.0.0.1 --port 8787
+```
+
+## API
+
+| Endpoint | Purpose |
 |---|---|
-| Quota chip (status bar) | ✅ **WORKING** — real per-model quota from Antigravity's login, zero setup |
-| `gemini-cli` Hermes skill | ✅ Installed — delegate coding tasks to Gemini CLI (needs one-time CLI login) |
-| Gemini as a **chat model** in Hermes | 🔒 Blocked on a Google OAuth scope — plan documented in `docs/status.md` |
-| Phone-completable OAuth login | ✅ **Proven** — loopback paste-back flow, tokens captured |
+| `GET /health` | liveness + active account + follow mode |
+| `GET /v1/models` | live model list (from GCA quota API) |
+| `POST /v1/chat/completions` | chat (OpenAI shape; `stream: true` → SSE) |
+| `GET /v1/account` | active account, follow mode, available accounts |
+| `POST /v1/account/switch` | `{"email": "…"}` — explicit override |
+| `POST /v1/account/follow-cockpit` | `{"follow": true\|false}` — re-enable Cockpit sync |
+
+## Ops & troubleshooting
+
+- **Logs:** `bridge.log` (uvicorn), `bridge-watchdog.log`.
+- **Bridge down?** Watchdog fixes within 5 min; or run `start_bridge.bat`.
+- **Port busy (8787)?** Watchdog detects and won't kill foreign processes —
+  change `PORT` in `gemini_cli_bridge.py` + `bridge_watchdog.py` + Hermes
+  config `api:` together.
+- **New Google account?** Add its refresh token to `accounts.json` (from a
+  Cockpit data-transfer export) and it appears in `/v1/account` immediately.
+- **Secrets:** `accounts.json` (email → refresh_token) is gitignored. Back it
+  up via Cockpit's export. Never commit it.
 
 ## Repo map
 
 ```
-README.md                      ← you are here (master index)
+README.md                    ← you are here
+CHANGELOG.md                 ← version history
+gemini_cli_bridge.py         ← the bridge (FastAPI, OpenAI-compatible)
+bridge_watchdog.py           ← self-heal watchdog
+start_bridge.bat             ← logon auto-start
+tests/                       ← unit tests (no network)
+scripts/                     ← research tools (token extraction, endpoint digging, legacy login helper)
+plugins/gemini-quota/        ← status-bar quota chip (desktop + Python backend) — still works
+skill/gemini-cli-SKILL.md    ← the Hermes skill documenting this technique
 docs/
-  cockpit-tools-analysis.md    ← how the reference project uses Gemini + switches accounts
-  oauth-findings.md            ← every OAuth client/scope/endpoint we tested
-  status.md                    ← what works / what's blocked / the open thread
-  how-we-did-it.md             ← full journey: commands, files, exact steps
-  pickup-guide.md              ← RESUME HERE: step-by-step continuation
-  recommendations.md           ← suggested next moves & guardrails
-plugins/
-  gemini-quota/                ← the working status-bar chip (desktop + Python backend)
-scripts/
-  extract_gemini_token.py      ← pull tokens from Antigravity's local login state
-  gemini_phone_login.py        ← phone-completable Google OAuth login
-  find_*.py                    ← bundle-digging tools (how we discovered endpoints)
-skill/
-  gemini-cli-SKILL.md          ← the Hermes skill that documents this whole technique
+  pickup-guide.md            ← ops + key findings (current)
+  how-we-did-it.md           ← full research journey
+  oauth-findings.md          ← OAuth clients/scopes/endpoints tested
+  cockpit-tools-analysis.md  ← how the reference project works
+  status.md                  ← current status
+  recommendations.md         ← next steps
 ```
 
-## Key facts (the one-paragraph version)
+## Roadmap / known limits
 
-1. **Quota works without any login** because Antigravity (Google's Gemini IDE,
-   installed & logged in on the office PC) stores its OAuth tokens in
-   `%APPDATA%\Antigravity\User\globalStorage\state.vscdb` — a SQLite table
-   (`ItemTable`, key `antigravityUnifiedStateSync.oauthToken`), base64 +
-   protobuf-wrapped. `scripts/extract_gemini_token.py` unwraps it.
-2. **Quota API:** `POST https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels`
-   with `Authorization: Bearer <access>` + User-Agent `antigravity/1.20.5 windows/amd64`
-   → `models[].quotaInfo.remainingFraction/resetTime`.
-3. **Chat models are blocked** because the public Gemini model API demands the
-   `https://www.googleapis.com/auth/generative-language` scope, and BOTH Google
-   OAuth clients we can use are `restricted_client` for it. The likely unlock:
-   the Gemini CLI generates through `cloudcode-pa.googleapis.com` with only
-   `cloud-platform` scope — the exact generation endpoint is the one open thread
-   (see `docs/status.md`).
-
-## Security
-
-- **Real tokens never belong in this repo.** Refresh/access tokens live only in
-  `~/.sharksms-outreach/gemini_tokens.json` (gitignored). If that file leaks,
-  revoke at https://myaccount.google.com/security → "Your connections" → revoke.
-- The OAuth client IDs/secrets in the scripts are **public** (shipped in the
-  open-source cockpit-tools repo and the `@google/gemini-cli` npm package).
-
----
-*Created 2026-08-19. Resume with `docs/pickup-guide.md`.*
+- Free Antigravity tier quota applies (weekly + 5-hour buckets — see the
+  quota chip).
+- Tool/function calling is not yet translated in the bridge — plain chat
+  works; agentic tool use is the next step.
+- Streaming delivers whole GCA events per SSE chunk (GCA does not stream
+  tokens incrementally through this RPC).

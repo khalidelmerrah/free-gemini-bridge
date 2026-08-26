@@ -122,19 +122,47 @@ Chip: `Gemini 100%` label; tooltip lists per-model remaining % + reset times,
 account email, click-to-refresh. Backend auto-re-extracts from `state.vscdb`
 when the refresh token fails.
 
-## Using Gemini as a CHAT model in Hermes (status: one login away)
+## Using Gemini as a CHAT model in Hermes — SOLVED (no login needed)
 
-The quota API works with the Antigravity token, but **model inference does NOT**:
-the generativelanguage API rejects it with `403 insufficient authentication scopes`
-(the Antigravity OAuth client's scopes lack `generative-language`). A **Gemini CLI
-login** (`gemini` first run / `login_gemini.bat` → NO_BROWSER flow, phone-completable)
-grants that scope. Once logged in, the plan is a local OpenAI-compat proxy
-(~100 lines: accept /v1/chat/completions → refresh token → map to native
-`generateContent` with Bearer → OpenAI-shaped response) registered as Hermes
-`custom` provider (base_url http://127.0.0.1:<port>/v1, dummy key). No Hermes
-source edits needed; `oauth_external` providers are deliberately not auto-injected
-(hermes_cli/models.py:1206) and would require editing app internals — the proxy
-avoids that.
+**Antigravity OAuth tokens (the ones Cockpit Tools manages) ARE accepted for full
+Gemini Code Assist inference** — no Gemini CLI login, no API key. Discovered
+2026-08-26 by direct API probing.
+
+The GCA backend only accepts the token when the request identifies as the
+**Antigravity IDE client** (the generic `gemini-cli` UA / `IDE_UNSPECIFIED`
+metadata gets `403 SUBSCRIPTION_REQUIRED #3501` or `IAM_PERMISSION_DENIED` on
+`cloudshell-gca`).
+
+Recipe (all against `https://daily-cloudcode-pa.googleapis.com/v1internal:*`):
+- Headers: `Authorization: Bearer <access_token>`,
+  `User-Agent: antigravity/1.20.5 windows/amd64 google-api-nodejs-client/10.3.0`,
+  `x-goog-api-client: gl-node/22.21.1`, gzip accepted.
+- `loadCodeAssist` with `metadata: {ideName:"antigravity", ideType:"ANTIGRAVITY",
+  ideVersion:"1.20.5", pluginVersion:"1.0.0", platform:"WINDOWS_AMD64",
+  updateChannel:"stable", pluginType:"GEMINI"}` (no `cloudaicompanionProject`)
+  → returns `currentTier: free-tier` (Gemini Code Assist for individuals).
+- `fetchAvailableModels` with `{}` body → live per-model quota + model ids
+  (gemini-3.6-flash-high, claude-sonnet-4-6, claude-opus-4-6-thinking,
+  gpt-oss-120b-medium, … — 25 models, includes Claude/GPT-OSS!).
+- `generateContent` body:
+  `{model, user_prompt_id, request: {contents:[{role,parts:[{text}]}], systemInstruction?, generationConfig?}}`
+  → `{response: {candidates:[{content:{role:"model",parts:[{thoughtSignature,text}]}}], usageMetadata}}`.
+  Streaming: same URL + `?alt=sse` → one `data: {json}` line per event.
+- Token: refresh via `https://oauth2.googleapis.com/token` with the public
+  Antigravity client (`1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com`
+  / `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`) and the account's refresh token
+  (Cockpit stores these; its data-transfer export includes them for antigravity).
+
+**Working bridge**: `C:\Users\admindev\gemini-hermes\gemini_cli_bridge.py`
+(FastAPI, OpenAI-compatible, port 8787, loopback-only) + `accounts.json`
+registry (email → refresh_token, gitignored) + `start_bridge.bat` registered as
+scheduled task `HermesGeminiBridge` (ONLOGON). Hermes custom provider
+`providers.gemini-cli` → `http://127.0.0.1:8787/v1`, models listed in config.
+**Account switching**: bridge auto-follows Cockpit's active account
+(`~/.antigravity_cockpit/accounts.json` → `current_account_id` → email) —
+switch in Cockpit and Hermes Gemini follows. Manual: `POST /v1/account/switch
+{email}` / `POST /v1/account/follow-cockpit {follow:true}`.
+Start/restart: `cd C:\Users\admindev\gemini-hermes && <hermes venv python> -m uvicorn gemini_cli_bridge:app --host 127.0.0.1 --port 8787`.
 
 ## Rules
 
