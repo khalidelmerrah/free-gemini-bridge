@@ -55,7 +55,7 @@ def _server():
 
 
 threading.Thread(target=_server, daemon=True).start()
-print("OPEN THIS LINK ON YOUR PHONE (logged into steave.j.jenkins@gmail.com):")
+print("OPEN THIS LINK ON YOUR PHONE (logged into the Google account you want):")
 print()
 print(AUTH_URL)
 print()
