@@ -151,6 +151,21 @@ docs/
   recommendations.md         ← next steps
 ```
 
+## Legal / risk note
+
+This project lets you drive the **Gemini Code Assist (Antigravity) tier** that
+comes with your own Google account through any OpenAI-compatible client. It is
+built for **personal and educational use, at your own risk**:
+
+- The free tier is intended for use inside Google's own products; Google's
+  terms may not permit third-party clients, and Google can change or revoke
+  access at any time (this bridge targets an internal RPC surface, not a
+  documented public API).
+- Do not resell access or use it for commercial workloads.
+- Your own Google account is used — abusive usage can affect your account.
+
+See `SECURITY.md` for the credential story.
+
 ## Roadmap / known limits
 
 - Free Antigravity tier quota applies (weekly + 5-hour buckets — see the
