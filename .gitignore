@@ -3,3 +3,10 @@ gemini_tokens.json
 creds.env
 pasted_code.txt
 *.token
+accounts.json
+bridge_state.json
+
+# local artifacts
+__pycache__/
+*.log
+watch_account_switch.py
